@@ -1,0 +1,13 @@
+#pragma once
+
+#include "formats.h"
+
+enum {
+	ROBUSTIRCTXT_MODULE_NAME,
+	ROBUSTIRCTXT_FILL_1,
+	ROBUSTIRCTXT_ERROR_TEMPORARY,
+	ROBUSTIRCTXT_ERROR_RETRY,
+	ROBUSTIRCTXT_ERROR_PARSE_JSON,
+};
+
+extern FORMAT_REC fe_robustirc_formats[];
