@@ -550,6 +550,11 @@ static void socket_recv_cb(void *data, GIOChannel *source, int condition) {
 
 /* irssi callback which notifies libcurl about a timeout. */
 static gboolean timeout_cb(gpointer user_data) {
+    if (user_data) {
+        g_free(user_data);
+        curl_multi_setopt(curl_handle, CURLMOPT_TIMERDATA, NULL);
+    }
+
     int running;
     CURLMcode result = curl_multi_socket_action(
         curl_handle, CURL_SOCKET_TIMEOUT, 0, &running);
@@ -559,7 +564,7 @@ static gboolean timeout_cb(gpointer user_data) {
                            curl_multi_strerror(result));
     }
     check_multi_info();
-    return G_SOURCE_CONTINUE;
+    return G_SOURCE_REMOVE;
 }
 
 /* libcurl callback which sets up a WeeChat hook to watch for events on socket |s|. */
@@ -613,7 +618,7 @@ static int start_timeout(CURLM *multi, long timeout_ms, void *userp) {
     } else {
         if (!id)
             id = g_new(guint, 1);
-        *id = g_timeout_add(timeout_ms, timeout_cb, NULL);
+        *id = g_timeout_add(timeout_ms, timeout_cb, id);
     }
     curl_multi_setopt(multi, CURLMOPT_TIMERDATA, id);
     return 0;
