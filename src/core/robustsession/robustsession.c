@@ -527,7 +527,7 @@ static void check_multi_info(void) {
 
     cleanup:
         curl_multi_remove_handle(curl_handle, message->easy_handle);
-            request->ctx->curl_handles = g_list_remove(request->ctx->curl_handles, message->easy_handle);
+        request->ctx->curl_handles = g_list_remove(request->ctx->curl_handles, message->easy_handle);
         curl_easy_cleanup(message->easy_handle);
         free(request->body->body);
         free(request->body);
