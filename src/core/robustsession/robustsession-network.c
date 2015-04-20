@@ -36,7 +36,7 @@ struct network_ctx {
 };
 
 struct query {
-    IRC_SERVER_REC *server;
+    SERVER_REC *server;
     robustsession_network_resolved_cb callback;
 };
 
@@ -85,7 +85,7 @@ bool robustsession_network_init(void) {
     return (networks != NULL);
 }
 
-void robustsession_network_resolve(IRC_SERVER_REC *server, robustsession_network_resolved_cb callback) {
+void robustsession_network_resolve(SERVER_REC *server, robustsession_network_resolved_cb callback) {
     // Skip resolving if we already resolved this network address.
     if (g_hash_table_lookup(networks, server->connrec->address)) {
         callback(server);

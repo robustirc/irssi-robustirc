@@ -747,7 +747,9 @@ static void robustsession_connect_resolved(IRC_SERVER_REC *server) {
         server);
 }
 
-void robustsession_connect(IRC_SERVER_REC *server) {
+// TODO: refactor this to get rid of the server_ctx hashtable and just return a
+// robustsession. should work fine now that we have the robustio channel.
+void robustsession_connect(SERVER_REC *server) {
     gchar *m = g_strdup_printf("server = %p, server->connrec = %p", server, server->connrec);
     printtext(NULL, NULL, MSGLEVEL_CRAP, "looking. server = %s", m);
     g_free(m);

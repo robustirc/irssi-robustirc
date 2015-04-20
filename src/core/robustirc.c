@@ -18,10 +18,12 @@
 #include "irc.h"
 #include "irc-servers.h"
 #include "irc-queries.h"
+#include "net-sendbuffer.h"
 #include "printtext.h"
 #include "levels.h"
 
 #include "robustirc.h"
+#include "robustio.h"
 #include "robustsession.h"
 
 static CHATNET_REC *create_chatnet(void) {
@@ -41,6 +43,7 @@ static SERVER_CONNECT_REC *create_server_connect(void) {
 }
 
 static void destroy_server_connect(IRC_SERVER_CONNECT_REC *conn) {
+    (void)conn;
 }
 
 SERVER_REC *robustirc_server_init_connect(SERVER_CONNECT_REC *connrec) {
@@ -50,7 +53,8 @@ SERVER_REC *robustirc_server_init_connect(SERVER_CONNECT_REC *connrec) {
 
     connrec->chat_type = IRC_PROTOCOL;
     server = irc_server_init_connect(connrec);
-    server->send_data_func = robustsession_send;
+    GIOChannel *handle = robust_io_channel_new(server);
+    server->handle = net_sendbuffer_create(handle, 0);
     // TODO: how many of these are necessary?
     server->connrec->no_connect = TRUE;
     server->connect_pid = -1;
@@ -92,7 +96,7 @@ void robustirc_server_connect(IRC_SERVER_REC *server) {
     printtext(NULL, NULL, MSGLEVEL_CRAP, "connect. server = %s", m);
     g_free(m);
 
-    robustsession_connect(server);
+    robustsession_connect(SERVER(server));
 
     //err:
     //    server->connection_lost = TRUE;
