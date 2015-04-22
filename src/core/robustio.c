@@ -7,14 +7,8 @@
 #include "printtext.h"
 #include "levels.h"
 
+#include "robustio.h"
 #include "robustsession.h"
-
-typedef struct _RobustIOChannel RobustIOChannel;
-
-struct _RobustIOChannel {
-    GIOChannel channel;
-    SERVER_REC *server;
-};
 
 static GIOStatus robust_io_read(GIOChannel *channel,
                                 gchar *buf,
@@ -99,15 +93,16 @@ static GIOStatus robust_io_write(GIOChannel *channel,
     (void)err;
     RobustIOChannel *robust_channel = (RobustIOChannel *)channel;
 
-    robustsession_send(robust_channel->server, buf, count);
+    robustsession_send(robust_channel->robustsession, robust_channel->server, buf, count);
     *bytes_written = count;
 
     return G_IO_STATUS_NORMAL;
 }
 
 static GIOStatus robust_io_close(GIOChannel *channel, GError **err) {
-    (void)channel;
     (void)err;
+    RobustIOChannel *robust_channel = (RobustIOChannel *)channel;
+    robustsession_destroy(robust_channel->robustsession);
     return G_IO_STATUS_NORMAL;
 }
 

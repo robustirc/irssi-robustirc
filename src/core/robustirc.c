@@ -54,6 +54,8 @@ SERVER_REC *robustirc_server_init_connect(SERVER_CONNECT_REC *connrec) {
     connrec->chat_type = IRC_PROTOCOL;
     server = irc_server_init_connect(connrec);
     GIOChannel *handle = robust_io_channel_new(server);
+    RobustIOChannel *io = (RobustIOChannel *)handle;
+    io->robustsession = robustsession_connect(server);
     server->handle = net_sendbuffer_create(handle, 0);
     // TODO: how many of these are necessary?
     server->connrec->no_connect = TRUE;
@@ -78,15 +80,6 @@ static void robustirc_server_connect_copy(SERVER_CONNECT_REC **dest, IRC_SERVER_
     }
 }
 
-static void robustirc_server_disconnected(SERVER_REC *server) {
-    printtext(NULL, NULL, MSGLEVEL_CRAP, "server disconnected, should destroy session");
-    gchar *m = g_strdup_printf("server = %p, server->connrec = %p", server, server->connrec);
-    printtext(NULL, NULL, MSGLEVEL_CRAP, "server = %s", m);
-    g_free(m);
-    robustsession_destroy(server);
-    printtext(NULL, NULL, MSGLEVEL_CRAP, "robustsession_destroy done");
-}
-
 void robustirc_server_connect(IRC_SERVER_REC *server) {
     if (!IS_IRC_SERVER(server)) {
         return;
@@ -95,8 +88,6 @@ void robustirc_server_connect(IRC_SERVER_REC *server) {
     gchar *m = g_strdup_printf("server = %p, server->connrec = %p", server, server->connrec);
     printtext(NULL, NULL, MSGLEVEL_CRAP, "connect. server = %s", m);
     g_free(m);
-
-    robustsession_connect(SERVER(server));
 
     //err:
     //    server->connection_lost = TRUE;
@@ -147,7 +138,6 @@ void robustirc_core_init(void) {
     command_set_options("connect", "robustirc");
 
     signal_add_last("server connect copy", (SIGNAL_FUNC)robustirc_server_connect_copy);
-    signal_add("server disconnected", (SIGNAL_FUNC)robustirc_server_disconnected);
 
     robustsession_init();
 

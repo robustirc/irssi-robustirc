@@ -36,10 +36,6 @@ static const long robustping = 4;
 
 static CURLM *curl_handle;
 
-// |server_ctx| stores context objects, keyed by an IRC_SERVER_REC pointer.
-// Used to attach data to an IRC_SERVER_REC without modifying irssi core code.
-static GHashTable *server_ctx;
-
 // TODO: when is this freed?
 struct t_robustsession_ctx {
     char *sessionid;
@@ -48,6 +44,8 @@ struct t_robustsession_ctx {
     struct curl_slist *headers;
 
     GList *curl_handles;
+
+    SERVER_REC *server;
 };
 
 struct t_body_buffer {
@@ -281,7 +279,7 @@ static gboolean get_messages_timeout(gpointer userdata) {
     free(request);
 
     if (address) {
-        robustsession_network_server(address, TRUE, get_messages, server);
+        robustsession_network_server(address, TRUE, get_messages, request->ctx);
         g_free(address);
     }
 
@@ -289,13 +287,9 @@ static gboolean get_messages_timeout(gpointer userdata) {
 }
 
 static void get_messages(const char *target, gpointer userdata) {
-    SERVER_REC *server = userdata;
     struct t_robustirc_request *request = NULL;
-    struct t_robustsession_ctx *ctx = NULL;
-
-    if (!(ctx = g_hash_table_lookup(server_ctx, server))) {
-        return;
-    }
+    struct t_robustsession_ctx *ctx = userdata;
+    SERVER_REC *server = ctx->server;
 
     CURL *curl = curl_easy_init();
     if (!curl) {
@@ -510,7 +504,7 @@ static void check_multi_info(void) {
                         request->server->connrec->address,
                         TRUE,
                         get_messages,
-                        request->server);
+                        request->ctx);
                 }
                 break;
             case RT_POSTMESSAGE:
@@ -658,14 +652,11 @@ bool robustsession_init(void) {
     curl_multi_setopt(curl_handle, CURLMOPT_SOCKETFUNCTION, socket_callback);
     curl_multi_setopt(curl_handle, CURLMOPT_TIMERFUNCTION, start_timeout);
 
-    server_ctx = g_hash_table_new(NULL, NULL);
-
     return robustsession_network_init();
 }
 
 void robustsession_deinit(void) {
     curl_multi_cleanup(curl_handle);
-    g_hash_table_unref(server_ctx);
 }
 
 static void curl_set_common_options(CURL *curl,
@@ -701,13 +692,9 @@ static void curl_set_common_options(CURL *curl,
 // Sends a CreateSession request.
 static void robustsession_connect_target(const char *target,
                                          gpointer userdata) {
-    IRC_SERVER_REC *server = userdata;
     CURL *curl = NULL;
-    struct t_robustsession_ctx *ctx = NULL;
-
-    if (!(ctx = g_hash_table_lookup(server_ctx, server))) {
-        return;
-    }
+    struct t_robustsession_ctx *ctx = userdata;
+    SERVER_REC *server = ctx->server;
 
     if (!(curl = curl_easy_init())) {
         printformat_module(MODULE_NAME, server, NULL,
@@ -739,32 +726,35 @@ static void robustsession_connect_target(const char *target,
     curl_multi_socket_action(curl_handle, CURL_SOCKET_TIMEOUT, 0, &running);
 }
 
-static void robustsession_connect_resolved(IRC_SERVER_REC *server) {
+static void robustsession_connect_resolved(
+    SERVER_REC *server, gpointer userdata) {
+    struct t_robustsession_ctx *ctx = userdata;
     robustsession_network_server(
         server->connrec->address,
         TRUE,
         robustsession_connect_target,
-        server);
+        ctx);
 }
 
-// TODO: refactor this to get rid of the server_ctx hashtable and just return a
-// robustsession. should work fine now that we have the robustio channel.
-void robustsession_connect(SERVER_REC *server) {
+struct t_robustsession_ctx *robustsession_connect(SERVER_REC *server) {
     gchar *m = g_strdup_printf("server = %p, server->connrec = %p", server, server->connrec);
     printtext(NULL, NULL, MSGLEVEL_CRAP, "looking. server = %s", m);
     g_free(m);
 
     struct t_robustsession_ctx *ctx = g_new0(struct t_robustsession_ctx, 1);
     ctx->lastseen = g_strdup("0.0");
-    g_hash_table_insert(server_ctx, server, ctx);
+    ctx->server = server;
 
-    robustsession_network_resolve(server, robustsession_connect_resolved);
+    robustsession_network_resolve(server, robustsession_connect_resolved, ctx);
     signal_emit("server looking", 1, server);
+
+    return ctx;
 }
 
 struct send_ctx {
     SERVER_REC *server;
     char *buffer;
+    struct t_robustsession_ctx *ctx;
 };
 
 static void robustsession_send_target(const char *target, gpointer callback) {
@@ -773,11 +763,7 @@ static void robustsession_send_target(const char *target, gpointer callback) {
     yajl_gen gen = NULL;
     CURL *curl = NULL;
     struct t_robustirc_request *request = NULL;
-    struct t_robustsession_ctx *ctx = NULL;
-
-    if (!(ctx = g_hash_table_lookup(server_ctx, send_ctx->server))) {
-        goto error;
-    }
+    struct t_robustsession_ctx *ctx = send_ctx->ctx;
 
     if (!(curl = curl_easy_init())) {
         printformat_module(MODULE_NAME, send_ctx->server, NULL,
@@ -850,23 +836,22 @@ error:
     free(send_ctx);
 }
 
-void robustsession_send(SERVER_REC *server, const char *buffer, int size_buf) {
-    struct send_ctx *ctx = g_new0(struct send_ctx, 1);
-    ctx->server = server;
-    ctx->buffer = g_strdup(buffer);
+void robustsession_send(struct t_robustsession_ctx *ctx, SERVER_REC *server, const char *buffer, int size_buf) {
+    assert(ctx);
+
+    struct send_ctx *sendctx = g_new0(struct send_ctx, 1);
+    sendctx->server = server;
+    sendctx->buffer = g_strdup(buffer);
+    sendctx->ctx = ctx;
     robustsession_network_server(
         server->connrec->address,
         FALSE,
         robustsession_send_target,
-        ctx);
+        sendctx);
 }
 
-void robustsession_destroy(SERVER_REC *server) {
-    struct t_robustsession_ctx *ctx = NULL;
-
-    if (!(ctx = g_hash_table_lookup(server_ctx, server))) {
-        return;
-    }
+void robustsession_destroy(struct t_robustsession_ctx *ctx) {
+    assert(ctx);
 
     // Abort all currently running requests. This prevents any callbacks from
     // triggering and trying to reference the server data which is about to be
@@ -890,6 +875,8 @@ void robustsession_destroy(SERVER_REC *server) {
     }
 
     g_list_free(ctx->curl_handles);
+
+    g_free(ctx);
 
     // TODO: send destroysession request, possibly only on a best-effort basis to avoid big refactoring.
 

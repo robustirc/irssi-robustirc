@@ -7,7 +7,8 @@
 #include "irc.h"
 #include "irc-servers.h"
 
-typedef void (*robustsession_network_resolved_cb)(SERVER_REC *server);
+typedef void (*robustsession_network_resolved_cb)(SERVER_REC *server,
+                                                  gpointer userdata);
 typedef void (*robustsession_network_server_cb)(const char *target,
                                                 gpointer userdata);
 
@@ -15,7 +16,8 @@ bool robustsession_network_init(void);
 
 void robustsession_network_resolve(
     SERVER_REC *server,
-    robustsession_network_resolved_cb callback);
+    robustsession_network_resolved_cb callback,
+    gpointer userdata);
 
 gboolean robustsession_network_server(
     const char *address,

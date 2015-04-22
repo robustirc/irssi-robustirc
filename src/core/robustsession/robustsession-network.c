@@ -38,6 +38,7 @@ struct network_ctx {
 struct query {
     SERVER_REC *server;
     robustsession_network_resolved_cb callback;
+    gpointer userdata;
 };
 
 static void srv_resolved(GObject *obj, GAsyncResult *res, gpointer user_data) {
@@ -75,7 +76,7 @@ static void srv_resolved(GObject *obj, GAsyncResult *res, gpointer user_data) {
 
     g_resolver_free_targets(targets);
     // TODO: here and below, signal resolving errors (g_list_length(servers) == 0)
-    query->callback(query->server);
+    query->callback(query->server, query->userdata);
     g_free(query);
 }
 
@@ -85,10 +86,13 @@ bool robustsession_network_init(void) {
     return (networks != NULL);
 }
 
-void robustsession_network_resolve(SERVER_REC *server, robustsession_network_resolved_cb callback) {
+void robustsession_network_resolve(
+    SERVER_REC *server,
+    robustsession_network_resolved_cb callback,
+    gpointer userdata) {
     // Skip resolving if we already resolved this network address.
     if (g_hash_table_lookup(networks, server->connrec->address)) {
-        callback(server);
+        callback(server, userdata);
         return;
     }
 
@@ -112,7 +116,7 @@ void robustsession_network_resolve(SERVER_REC *server, robustsession_network_res
         gchar *key = g_ascii_strdown(server->connrec->address, -1);
         g_hash_table_insert(networks, key, ctx);
         g_strfreev(targets);
-        callback(server);
+        callback(server, userdata);
         return;
     }
     g_strfreev(targets);
@@ -120,6 +124,7 @@ void robustsession_network_resolve(SERVER_REC *server, robustsession_network_res
     struct query *query = g_new0(struct query, 1);
     query->server = server;
     query->callback = callback;
+    query->userdata = userdata;
 
     GResolver *resolver = g_resolver_get_default();
     g_resolver_lookup_service_async(
