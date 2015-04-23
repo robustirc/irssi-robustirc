@@ -577,8 +577,11 @@ static int socket_callback(CURL *easy, curl_socket_t s, int what, void *userp, v
         return 0;
     }
 
-    if (!id)
+    if (!id) {
         id = g_new(guint, 1);
+    } else {
+        g_source_remove(*id);
+    }
     GIOChannel *handle = g_io_channel_new(s);
     int condition = 0;
     switch (what) {
