@@ -488,8 +488,13 @@ static void check_multi_info(void) {
         }
 
         if (error && !temporary_error) {
-            printtext(NULL, NULL, MSGLEVEL_CRAP, "TODO: handle permanent error, http code %d", http_code);
-            // TODO: cause a server disconnect event and free memory! this error is unrecoverable.
+            gchar *reason = g_strdup_printf("HTTP error code %ld", http_code);
+            printformat_module(MODULE_NAME, request->server, NULL,
+                               MSGLEVEL_CRAP, ROBUSTIRCTXT_ERROR_PERMANENT,
+                               reason);
+            g_free(reason);
+            request->server->connection_lost = TRUE;
+            server_disconnect(request->server);
             continue;
         }
 
@@ -511,8 +516,9 @@ static void check_multi_info(void) {
                 break;
             case RT_GETMESSAGES:
                 // Typically unreached: a GetMessages request will never
-                // successfully return. Messages are extracted from the
-                // never-ending JSON stream instead.
+                // successfully return, except when the session is killed.
+                // Messages are extracted from the never-ending JSON stream
+                // instead.
                 g_source_remove(request->timeout_tag);
                 break;
             default:
