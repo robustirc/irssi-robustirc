@@ -76,7 +76,7 @@ static void robustirc_server_connect_copy(SERVER_CONNECT_REC **dest, IRC_SERVER_
     // Perhaps the irssi code structure has changed?
     assert(*dest != NULL);
 
-    if (strcmp(src->chatnet, "robustirc") == 0) {
+    if (src->chatnet && strcmp(src->chatnet, "robustirc") == 0) {
         // So that robustirc_server_init_connect is called on reconnects.
         (*dest)->chat_type = ROBUSTIRC_PROTOCOL;
     }
