@@ -39,7 +39,9 @@ static CHANNEL_SETUP_REC *create_channel_setup(void) {
 }
 
 static SERVER_CONNECT_REC *create_server_connect(void) {
-    return g_malloc0(sizeof(IRC_SERVER_CONNECT_REC));
+    SERVER_CONNECT_REC *connrec = g_malloc0(sizeof(IRC_SERVER_CONNECT_REC));
+    connrec->chatnet = g_strdup("robustirc");
+    return connrec;
 }
 
 static void destroy_server_connect(IRC_SERVER_CONNECT_REC *conn) {
