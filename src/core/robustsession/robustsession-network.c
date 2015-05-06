@@ -39,7 +39,14 @@ struct query {
     SERVER_REC *server;
     robustsession_network_resolved_cb callback;
     gpointer userdata;
+    GCancellable *cancellable;
+    gulong cancellable_handler;
 };
+
+static void resolve_cancelled(GCancellable *cancellable, gpointer user_data) {
+    printtext(NULL, NULL, MSGLEVEL_CRAP, "resolve_cancelled()");
+    g_free(user_data);
+}
 
 static void srv_resolved(GObject *obj, GAsyncResult *res, gpointer user_data) {
     struct query *query = user_data;
@@ -47,6 +54,9 @@ static void srv_resolved(GObject *obj, GAsyncResult *res, gpointer user_data) {
     GError *err = NULL;
     GResolver *resolver = (GResolver *)obj;
     GList *targets = g_resolver_lookup_service_finish(resolver, res, &err);
+    if (g_cancellable_is_cancelled(query->cancellable)) {
+        return;
+    }
     if (err != NULL) {
         // TODO: is this how irssi’s retry works?
         robustsession_connect(query->server);
@@ -77,6 +87,7 @@ static void srv_resolved(GObject *obj, GAsyncResult *res, gpointer user_data) {
     g_resolver_free_targets(targets);
     // TODO: here and below, signal resolving errors (g_list_length(servers) == 0)
     query->callback(query->server, query->userdata);
+    g_cancellable_disconnect(query->cancellable, query->cancellable_handler);
     g_free(query);
 }
 
@@ -88,6 +99,7 @@ bool robustsession_network_init(void) {
 
 void robustsession_network_resolve(
     SERVER_REC *server,
+    GCancellable *cancellable,
     robustsession_network_resolved_cb callback,
     gpointer userdata) {
     // Skip resolving if we already resolved this network address.
@@ -126,13 +138,22 @@ void robustsession_network_resolve(
     query->callback = callback;
     query->userdata = userdata;
 
+    gulong cancellable_handler =
+        g_cancellable_connect(cancellable, G_CALLBACK(resolve_cancelled), query, NULL);
+    if (cancellable_handler == 0) {
+        // g_cancellable_connect called g_free(query).
+        return;
+    }
+    query->cancellable = cancellable;
+    query->cancellable_handler = cancellable_handler;
+
     GResolver *resolver = g_resolver_get_default();
     g_resolver_lookup_service_async(
         resolver,
         "robustirc",
         "tcp",
         server->connrec->address,
-        NULL,  // TODO: do we want to cancel this on timeout?
+        cancellable,
         srv_resolved,
         query);
     g_object_unref(resolver);
@@ -143,12 +164,23 @@ struct server_retry_ctx {
     gboolean random;
     robustsession_network_server_cb callback;
     gpointer userdata;
+    guint timeout_id;
+    GCancellable *cancellable;
+    gulong cancellable_handler;
 };
+
+static void retry_cancelled(GCancellable *cancellable, gpointer user_data) {
+    struct server_retry_ctx *ctx = user_data;
+    g_source_remove(ctx->timeout_id);
+    g_free(ctx->address);
+    g_free(ctx);
+}
 
 static gboolean robustsession_network_server_retry_cb(gpointer user_data) {
     struct server_retry_ctx *ctx = user_data;
     robustsession_network_server(
-        ctx->address, ctx->random, ctx->callback, ctx->userdata);
+        ctx->address, ctx->random, ctx->cancellable, ctx->callback, ctx->userdata);
+    g_cancellable_disconnect(ctx->cancellable, ctx->cancellable_handler);
     free(ctx->address);
     free(ctx);
     return FALSE;
@@ -163,6 +195,7 @@ static gboolean robustsession_network_server_retry_cb(gpointer user_data) {
 gboolean robustsession_network_server(
     const char *address,
     gboolean random,
+    GCancellable *cancellable,
     robustsession_network_server_cb callback,
     gpointer userdata) {
     gchar *key = g_ascii_strdown(address, -1);
@@ -225,8 +258,18 @@ gboolean robustsession_network_server(
     retry_ctx->random = random;
     retry_ctx->callback = callback;
     retry_ctx->userdata = userdata;
-    g_timeout_add_seconds(
+    retry_ctx->timeout_id = g_timeout_add_seconds(
         soonest, robustsession_network_server_retry_cb, retry_ctx);
+
+    gulong cancellable_handler =
+        g_cancellable_connect(cancellable, G_CALLBACK(retry_cancelled), retry_ctx, NULL);
+    if (cancellable_handler == 0) {
+        // g_cancellable_connect called g_free(retry_ctx).
+        return;
+    }
+    retry_ctx->cancellable = cancellable;
+    retry_ctx->cancellable_handler = cancellable_handler;
+
     return TRUE;
 }
 

@@ -45,6 +45,8 @@ struct t_robustsession_ctx {
 
     GList *curl_handles;
 
+    GCancellable *cancellable;
+
     SERVER_REC *server;
 };
 
@@ -279,7 +281,7 @@ static gboolean get_messages_timeout(gpointer userdata) {
     free(request);
 
     if (address) {
-        robustsession_network_server(address, TRUE, get_messages, request->ctx);
+        robustsession_network_server(address, TRUE, request->ctx->cancellable, get_messages, request->ctx);
         g_free(address);
     }
 
@@ -482,6 +484,7 @@ static void check_multi_info(void) {
             robustsession_network_server(
                 request->server->connrec->address,
                 (request->type == RT_GETMESSAGES),
+                request->ctx->cancellable,
                 retry_request,
                 message->easy_handle);
             continue;
@@ -508,6 +511,7 @@ static void check_multi_info(void) {
                     robustsession_network_server(
                         request->server->connrec->address,
                         TRUE,
+                        request->ctx->cancellable,
                         get_messages,
                         request->ctx);
                 }
@@ -741,6 +745,7 @@ static void robustsession_connect_resolved(
     robustsession_network_server(
         server->connrec->address,
         TRUE,
+        ctx->cancellable,
         robustsession_connect_target,
         ctx);
 }
@@ -753,8 +758,9 @@ struct t_robustsession_ctx *robustsession_connect(SERVER_REC *server) {
     struct t_robustsession_ctx *ctx = g_new0(struct t_robustsession_ctx, 1);
     ctx->lastseen = g_strdup("0.0");
     ctx->server = server;
+    ctx->cancellable = g_cancellable_new();
 
-    robustsession_network_resolve(server, robustsession_connect_resolved, ctx);
+    robustsession_network_resolve(server, ctx->cancellable, robustsession_connect_resolved, ctx);
     signal_emit("server looking", 1, server);
 
     return ctx;
@@ -855,12 +861,16 @@ void robustsession_send(struct t_robustsession_ctx *ctx, SERVER_REC *server, con
     robustsession_network_server(
         server->connrec->address,
         FALSE,
+        ctx->cancellable,
         robustsession_send_target,
         sendctx);
 }
 
 void robustsession_destroy(struct t_robustsession_ctx *ctx) {
     assert(ctx);
+
+    // Abort all pending robustsession_network_* operations.
+    g_cancellable_cancel(ctx->cancellable);
 
     // Abort all currently running requests. This prevents any callbacks from
     // triggering and trying to reference the server data which is about to be

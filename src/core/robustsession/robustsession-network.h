@@ -16,12 +16,14 @@ bool robustsession_network_init(void);
 
 void robustsession_network_resolve(
     SERVER_REC *server,
+    GCancellable *cancellable,
     robustsession_network_resolved_cb callback,
     gpointer userdata);
 
 gboolean robustsession_network_server(
     const char *address,
     gboolean random,
+    GCancellable *cancellable,
     robustsession_network_server_cb callback,
     gpointer userdata);
 
