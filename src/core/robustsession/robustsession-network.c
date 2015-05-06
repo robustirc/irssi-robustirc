@@ -291,11 +291,12 @@ void robustsession_network_failed(const char *address, const char *target) {
     if (backoff->exponent < 6) {
         backoff->exponent++;
     }
-    backoff->next = time(NULL) + pow(2, backoff->exponent);
+    backoff->next = time(NULL) +
+                    pow(2, backoff->exponent) +
+                    (rand() % (backoff->exponent + 1));
 #if 0
     printtext(NULL, NULL, MSGLEVEL_CRAP, "set backoff = %d, next = %d for *%s*", backoff->exponent, backoff->next, target);
 #endif
-    // TODO: jitter
     g_hash_table_replace(ctx->backoff, (gpointer)g_strdup(target), backoff);
 }
 
