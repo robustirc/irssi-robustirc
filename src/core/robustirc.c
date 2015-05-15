@@ -26,6 +26,8 @@
 #include "robustio.h"
 #include "robustsession.h"
 
+static GHashTable *connrecs = NULL;
+
 static CHATNET_REC *create_chatnet(void) {
     return g_malloc0(sizeof(CHATNET_REC));
 }
@@ -39,9 +41,7 @@ static CHANNEL_SETUP_REC *create_channel_setup(void) {
 }
 
 static SERVER_CONNECT_REC *create_server_connect(void) {
-    SERVER_CONNECT_REC *connrec = g_malloc0(sizeof(IRC_SERVER_CONNECT_REC));
-    connrec->chatnet = g_strdup("robustirc");
-    return connrec;
+    return g_malloc0(sizeof(IRC_SERVER_CONNECT_REC));
 }
 
 static void destroy_server_connect(IRC_SERVER_CONNECT_REC *conn) {
@@ -52,6 +52,8 @@ SERVER_REC *robustirc_server_init_connect(SERVER_CONNECT_REC *connrec) {
     SERVER_REC *server;
 
     printtext(NULL, NULL, MSGLEVEL_CRAP, "robustirc_server_init_connect");
+
+    g_hash_table_insert(connrecs, connrec, NULL);
 
     connrec->chat_type = IRC_PROTOCOL;
     server = irc_server_init_connect(connrec);
@@ -76,9 +78,10 @@ static void robustirc_server_connect_copy(SERVER_CONNECT_REC **dest, IRC_SERVER_
     // Perhaps the irssi code structure has changed?
     assert(*dest != NULL);
 
-    if (src->chatnet && strcmp(src->chatnet, "robustirc") == 0) {
+    if (g_hash_table_lookup_extended(connrecs, src, NULL, NULL)) {
         // So that robustirc_server_init_connect is called on reconnects.
         (*dest)->chat_type = ROBUSTIRC_PROTOCOL;
+        g_hash_table_remove(connrecs, src);
     }
 }
 
@@ -141,6 +144,8 @@ void robustirc_core_init(void) {
 
     signal_add_last("server connect copy", (SIGNAL_FUNC)robustirc_server_connect_copy);
 
+    connrecs = g_hash_table_new(NULL, NULL);
+
     robustsession_init();
 
     module_register(MODULE_NAME, "core");
@@ -148,4 +153,6 @@ void robustirc_core_init(void) {
 
 void robustirc_core_deinit(void) {
     robustsession_deinit();
+
+    g_hash_table_destroy(connrecs);
 }
