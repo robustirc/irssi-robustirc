@@ -474,7 +474,8 @@ static void check_multi_info(void) {
                 request->server->connrec->address, request->target);
         }
 
-        if (error && temporary_error) {
+        if ((error && temporary_error) ||
+            (!error && request->type == RT_GETMESSAGES)) {
             curl_multi_remove_handle(curl_handle, message->easy_handle);
             request->ctx->curl_handles = g_list_remove(request->ctx->curl_handles, message->easy_handle);
             if (request->type == RT_GETMESSAGES) {
@@ -517,13 +518,6 @@ static void check_multi_info(void) {
                 }
                 break;
             case RT_POSTMESSAGE:
-                break;
-            case RT_GETMESSAGES:
-                // Typically unreached: a GetMessages request will never
-                // successfully return, except when the session is killed.
-                // Messages are extracted from the never-ending JSON stream
-                // instead.
-                g_source_remove(request->timeout_tag);
                 break;
             default:
                 assert(false);
