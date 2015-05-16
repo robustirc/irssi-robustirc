@@ -860,8 +860,45 @@ void robustsession_send(struct t_robustsession_ctx *ctx, SERVER_REC *server, con
         sendctx);
 }
 
+// Delivers outstanding /message requests, but never reads anything or interacts with irssi.
+void robustsession_write_only(struct t_robustsession_ctx *ctx) {
+    assert(ctx);
+
+    printtext(NULL, NULL, MSGLEVEL_CRAP, "robustsession_write_only");
+
+    // Abort all currently running GetMessages, set the server pointer to NULL
+    // for the rest. This prevents any callbacks from triggering and trying to
+    // reference the server data which is about to be freed.
+    for (GList *h = ctx->curl_handles; h;) {
+        CURL *curl = h->data;
+        // TODO: refactor cleanup into a separate function
+        struct t_robustirc_request *request = NULL;
+        curl_easy_getinfo(curl, CURLINFO_PRIVATE, &request);
+        if (request->type != RT_GETMESSAGES) {
+            request->server = NULL;
+            h = h->next;
+            continue;
+        }
+        curl_multi_remove_handle(curl_handle, curl);
+        curl_easy_cleanup(curl);
+
+        g_source_remove(request->timeout_tag);
+
+        free(request->body->body);
+        free(request->body);
+        free(request->target);
+        free(request);
+        GList *next = h->next;
+        ctx->curl_handles = g_list_remove_link(ctx->curl_handles, h);
+        g_list_free_1(h);
+        h = next;
+    }
+}
+
 void robustsession_destroy(struct t_robustsession_ctx *ctx) {
     assert(ctx);
+
+    printtext(NULL, NULL, MSGLEVEL_CRAP, "robustsession_destroy");
 
     // Abort all pending robustsession_network_* operations.
     g_cancellable_cancel(ctx->cancellable);

@@ -53,8 +53,6 @@ SERVER_REC *robustirc_server_init_connect(SERVER_CONNECT_REC *connrec) {
 
     printtext(NULL, NULL, MSGLEVEL_CRAP, "robustirc_server_init_connect");
 
-    g_hash_table_insert(connrecs, connrec, NULL);
-
     connrec->chat_type = IRC_PROTOCOL;
     server = irc_server_init_connect(connrec);
     GIOChannel *handle = robust_io_channel_new(server);
@@ -65,6 +63,9 @@ SERVER_REC *robustirc_server_init_connect(SERVER_CONNECT_REC *connrec) {
     server->connrec->no_connect = TRUE;
     server->connect_pid = -1;
     server->connect_tag = 1;
+
+    g_hash_table_insert(connrecs, connrec, server);
+
     return server;
 }
 
@@ -78,11 +79,28 @@ static void robustirc_server_connect_copy(SERVER_CONNECT_REC **dest, IRC_SERVER_
     // Perhaps the irssi code structure has changed?
     assert(*dest != NULL);
 
-    if (g_hash_table_lookup_extended(connrecs, src, NULL, NULL)) {
-        // So that robustirc_server_init_connect is called on reconnects.
-        (*dest)->chat_type = ROBUSTIRC_PROTOCOL;
-        g_hash_table_remove(connrecs, src);
-    }
+    SERVER_REC *server = g_hash_table_lookup(connrecs, src);
+    g_return_if_fail(server != NULL);
+    // We need to trigger the server reconnect save status signal here because
+    // chat_type needs to be IRC_PROTOCOL at the time when that signal is
+    // processed so that channels are saved for rejoining after reconnecting.
+    (*dest)->type = module_get_uniq_id("SERVER CONNECT", 0);
+    // Passing |src| is intentional: properties get copied over from |src| to
+    // |*dest| in server_connect_copy_skeleton() once this signal handler
+    // returns.
+    signal_emit("server reconnect save status", 2, src, server);
+    // So that robustirc_server_init_connect is called on reconnects.
+    (*dest)->chat_type = ROBUSTIRC_PROTOCOL;
+    g_hash_table_remove(connrecs, src);
+}
+
+static void robustirc_server_disconnected(SERVER_REC *server) {
+    g_return_if_fail(server != NULL);
+    g_return_if_fail(server->handle != NULL);
+    g_return_if_fail(server->handle->handle != NULL);
+    printtext(NULL, NULL, MSGLEVEL_CRAP, "disconnect from server, marking robustsession write-only");
+    RobustIOChannel *io = (RobustIOChannel *)server->handle->handle;
+    robustsession_write_only(io->robustsession);
 }
 
 void robustirc_server_connect(IRC_SERVER_REC *server) {
@@ -143,6 +161,7 @@ void robustirc_core_init(void) {
     command_set_options("connect", "robustirc");
 
     signal_add_last("server connect copy", (SIGNAL_FUNC)robustirc_server_connect_copy);
+    signal_add_last("server disconnected", (SIGNAL_FUNC)robustirc_server_disconnected);
 
     connrecs = g_hash_table_new(NULL, NULL);
 
