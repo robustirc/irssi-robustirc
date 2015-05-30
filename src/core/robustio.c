@@ -47,6 +47,10 @@ static GIOFuncs robust_channel_funcs = {
     .io_get_flags = robust_io_get_flags,
 };
 
+gboolean robust_io_is_robustio_channel(GIOChannel *channel) {
+    return (channel->funcs == &robust_channel_funcs);
+}
+
 GIOChannel *robust_io_channel_new(SERVER_REC *server) {
     RobustIOChannel *channel;
     GIOChannel *iochannel;

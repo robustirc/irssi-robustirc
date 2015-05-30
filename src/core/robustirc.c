@@ -98,6 +98,10 @@ static void robustirc_server_disconnected(SERVER_REC *server) {
     g_return_if_fail(server != NULL);
     g_return_if_fail(server->handle != NULL);
     g_return_if_fail(server->handle->handle != NULL);
+    if (!robust_io_is_robustio_channel(server->handle->handle)) {
+        printtext(NULL, NULL, MSGLEVEL_CRAP, "disconnect from server, but not a robustio channel");
+        return;
+    }
     printtext(NULL, NULL, MSGLEVEL_CRAP, "disconnect from server, marking robustsession write-only");
     RobustIOChannel *io = (RobustIOChannel *)server->handle->handle;
     robustsession_write_only(io->robustsession);
