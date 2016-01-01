@@ -466,7 +466,11 @@ static void check_multi_info(void) {
                                request->curl_error_buf);
         }
 
-        if (error) {
+        // RT_GETMESSAGES requests are never-ending. If such a request
+        // succeeds, the server has closed the connection, likely because the
+        // server is in a network partition. Hence, treat a finished
+        // RT_GETMESSAGES like an error.
+        if (error || request->type == RT_GETMESSAGES) {
             robustsession_network_failed(
                 request->server->connrec->address, request->target);
         } else {
