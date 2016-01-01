@@ -686,6 +686,7 @@ static void curl_set_common_options(CURL *curl,
                      (int)server->connrec->ssl_verify);
 
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5);
 
     if (server->connrec->family) {
         long resolve = CURL_IPRESOLVE_V6;
