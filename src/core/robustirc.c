@@ -139,6 +139,12 @@ QUERY_REC *query_create(const char *server_tag,
     return rec;
 }
 
+#ifdef IRSSI_ABI_VERSION
+void robustirc_core_abicheck(int *version) {
+    *version = IRSSI_ABI_VERSION;
+}
+#endif
+
 void robustirc_core_init(void) {
     CHAT_PROTOCOL_REC *rec;
     rec = g_new0(CHAT_PROTOCOL_REC, 1);
