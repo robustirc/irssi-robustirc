@@ -27,3 +27,9 @@ void fe_robustirc_init(void) {
 void fe_robustirc_deinit(void) {
     signal_remove("server add fill", sig_server_add_fill);
 }
+
+#ifdef IRSSI_ABI_VERSION
+void fe_robustirc_abicheck(int *version) {
+    *version = IRSSI_ABI_VERSION;
+}
+#endif
