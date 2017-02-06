@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <stdint.h>
+#include <inttypes.h>
 
 // external library includes
 #include <curl/curl.h>
@@ -88,8 +90,8 @@ struct t_robustirc_request {
     char *data;
     bool parsing_id;
     bool parsing_servers;
-    long last_id_id;
-    long last_id_reply;
+    uint64_t last_id_id;
+    uint64_t last_id_reply;
     long last_type;
     int depth;
     GList *servers;
@@ -156,9 +158,9 @@ static int gm_json_integer(void *ctx, long long val) {
     }
     if (request->parsing_id) {
         if (strcasecmp(request->last_key, "id") == 0) {
-            request->last_id_id = val;
+            request->last_id_id = (uint64_t)val;
         } else if (strcasecmp(request->last_key, "reply") == 0) {
-            request->last_id_reply = val;
+            request->last_id_reply = (uint64_t)val;
         }
     }
     if (strcasecmp(request->last_key, "type") == 0) {
@@ -225,7 +227,7 @@ static int gm_json_end_map(void *ctx) {
         request->data = NULL;
         free(request->ctx->lastseen);
         request->ctx->lastseen = g_strdup_printf(
-            "%ld.%ld",
+            PRIu64 "." PRIu64,
             request->last_id_id,
             request->last_id_reply);
     }
