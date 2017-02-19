@@ -227,7 +227,7 @@ static int gm_json_end_map(void *ctx) {
         request->data = NULL;
         free(request->ctx->lastseen);
         request->ctx->lastseen = g_strdup_printf(
-            PRIu64 "." PRIu64,
+            "%" PRIu64 ".%" PRIu64,
             request->last_id_id,
             request->last_id_reply);
     }
