@@ -31,7 +31,7 @@ struct backoff_state {
 };
 
 struct network_ctx {
-    GList *servers;
+    GQueue *servers;
     GHashTable *backoff;
 };
 
@@ -66,7 +66,7 @@ static void srv_resolved(GObject *obj, GAsyncResult *res, gpointer user_data) {
     // Note that we do not shuffle the list of targets here, but call
     // robustsession_network_server() with random == TRUE for CreateSession
     // requests, achieving the same effect.
-    GList *servers = NULL;
+    GQueue *servers = g_queue_new();
     for (GList *r = targets; r != NULL; r = r->next) {
         GSrvTarget *target = r->data;
         gchar *server = g_strdup_printf(
@@ -74,7 +74,7 @@ static void srv_resolved(GObject *obj, GAsyncResult *res, gpointer user_data) {
             g_srv_target_get_hostname(target),
             g_srv_target_get_port(target));
         if (server) {
-            servers = g_list_append(servers, server);
+            g_queue_push_tail(servers, server);
         }
     }
 
@@ -113,13 +113,14 @@ void robustsession_network_resolve(
     guint len = g_strv_length(targets);
     if (len > 1) {
         struct network_ctx *ctx = g_new0(struct network_ctx, 1);
+        ctx->servers = g_queue_new();
         ctx->backoff = g_hash_table_new(g_str_hash, g_str_equal);
         for (guint i = 0; i < len; i++) {
             gchar *server = g_strdup(targets[i]);
             if (server) {
                 g_strstrip(server);
                 if (strcmp(server, "") != 0) {
-                    ctx->servers = g_list_append(ctx->servers, server);
+                    g_queue_push_tail(ctx->servers, server);
                 } else {
                     g_free(server);
                 }
@@ -218,33 +219,42 @@ gboolean robustsession_network_server(
 
     // Try to use a random server, but fall back to using the next
     // available server in case the randomly picked server is unhealthy.
-    if (random) {
-        gchar *server = g_list_nth_data(
-            ctx->servers, rand() % g_list_length(ctx->servers));
-        struct backoff_state *backoff =
-            g_hash_table_lookup(ctx->backoff, server);
+    gchar *server = g_queue_pop_nth(ctx->servers, 0);
+
+    struct backoff_state *backoff =
+        g_hash_table_lookup(ctx->backoff, server);
+
 #if 0
-        printtext(NULL, NULL, MSGLEVEL_CRAP, "backoff = %s for *%s*", (backoff ? "yes" : "no"), server);
-        if (backoff)
-            printtext(NULL, NULL, MSGLEVEL_CRAP, "current backoff = %d, next = %d for *%s*, time = %d", backoff->exponent, backoff->next, server, time(NULL));
+    printtext(NULL, NULL, MSGLEVEL_CRAP, "backoff = %s for *%s*", (backoff ? "yes" : "no"), server);
+    if (backoff)
+        printtext(NULL, NULL, MSGLEVEL_CRAP, "current backoff = %d, next = %d for *%s*, time = %d", backoff->exponent, backoff->next, server, time(NULL));
 #endif
-        if (!backoff || backoff->next <= time(NULL)) {
-            callback(server, userdata);
-            return TRUE;
-        }
+    if (!backoff || backoff->next <= time(NULL)) {
+        // Retry this server next.
+        g_queue_push_head(ctx->servers, server);
+        callback(server, userdata);
+        return TRUE;
     }
+    // Retry this server last.
+    g_queue_push_tail(ctx->servers, server);
 
     time_t soonest = LONG_MAX;
-    for (GList *s = ctx->servers; s != NULL; s = s->next) {
+    for (guint i = 0; i < g_queue_get_length(ctx->servers); i++) {
+        gchar *s = g_queue_peek_nth(ctx->servers, i);
         struct backoff_state *backoff =
-            g_hash_table_lookup(ctx->backoff, s->data);
+            g_hash_table_lookup(ctx->backoff, s);
+
 #if 0
-        printtext(NULL, NULL, MSGLEVEL_CRAP, "backoff = %s for s->data=*%s*", (backoff ? "yes" : "no"), s->data);
+        printtext(NULL, NULL, MSGLEVEL_CRAP, "backoff = %s for s->data=*%s*", (backoff ? "yes" : "no"), s);
         if (backoff)
-            printtext(NULL, NULL, MSGLEVEL_CRAP, "current backoff = %d, next = %d for *%s*, time = %d", backoff->exponent, backoff->next, s->data, time(NULL));
+            printtext(NULL, NULL, MSGLEVEL_CRAP, "current backoff = %d, next = %d for *%s*, time = %d", backoff->exponent, backoff->next, s, time(NULL));
 #endif
+
         if (!backoff || backoff->next <= time(NULL)) {
-            callback(s->data, userdata);
+            // Retry this server next.
+            s = g_queue_pop_nth(ctx->servers, i);
+            g_queue_push_head(ctx->servers, s);
+            callback(s, userdata);
             return TRUE;
         }
         const time_t wait = backoff->next - time(NULL);
@@ -310,14 +320,39 @@ void robustsession_network_succeeded(const char *address, const char *target) {
     g_hash_table_remove(ctx->backoff, target);
 }
 
-void robustsession_network_update_servers(const char *address, GList *servers) {
+static gint gcharcmp(gconstpointer a, gconstpointer b) {
+    gchar *s1 = a;
+    gchar *s2 = b;
+    if (strlen(s1) != strlen(s2)) {
+        return 1;
+    }
+    return g_ascii_strncasecmp(s1, s2, strlen(s1));
+}
+
+void robustsession_network_update_servers(const char *address, GQueue *servers) {
     gchar *key = g_ascii_strdown(address, -1);
     struct network_ctx *ctx = g_hash_table_lookup(networks, key);
     g_free(key);
     if (!ctx) {
         return;
     }
-    g_list_free_full(ctx->servers, g_free);
+
+    // Skip the update if both queues contain the same entries so that our retry
+    // order within the queue is kept. The algorithm is quadratic, but only used
+    // for very small n=3.
+    gboolean equal = TRUE;
+    for (guint i = 0; i < g_queue_get_length(servers); i++) {
+        if (g_queue_find_custom(ctx->servers, g_queue_peek_nth(servers, i), gcharcmp) == NULL) {
+            equal = FALSE;
+            break;
+        }
+    }
+    if (equal) {
+        g_queue_free_full(servers, g_free);
+        return;
+    }
+
+    g_queue_free_full(ctx->servers, g_free);
     ctx->servers = servers;
 
     // TODO: delete entries in ctx->backoff which now no longer have a corresponding server

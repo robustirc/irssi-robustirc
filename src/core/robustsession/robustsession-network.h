@@ -31,4 +31,4 @@ void robustsession_network_failed(const char *address, const char *target);
 
 void robustsession_network_succeeded(const char *address, const char *target);
 
-void robustsession_network_update_servers(const char *address, GList *servers);
+void robustsession_network_update_servers(const char *address, GQueue *servers);

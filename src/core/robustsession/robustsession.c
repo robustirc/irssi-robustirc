@@ -36,7 +36,11 @@
 static const long robustirc_to_client = 3;
 static const long robustping = 4;
 
+// TODO: use one curl_handle per connection so that the host limit works
+// correctly, even for people who open two sessions on the same RobustIRC
+// network.
 static CURLM *curl_handle;
+static CURLM *curl_handle_gm;
 
 // TODO: when is this freed?
 struct t_robustsession_ctx {
@@ -94,7 +98,7 @@ struct t_robustirc_request {
     uint64_t last_id_reply;
     long last_type;
     int depth;
-    GList *servers;
+    GQueue *servers;
 };
 
 static void get_messages(const char *target, gpointer userdata);
@@ -174,7 +178,7 @@ static int gm_json_string(void *ctx, const unsigned char *val, size_t len) {
     if (request->parsing_servers) {
         char *str = g_new0(char, len + 1);
         memcpy(str, val, len);
-        request->servers = g_list_append(request->servers, str);
+        g_queue_push_tail(request->servers, str);
         return 1;
     }
     if (!request->last_key) {
@@ -193,7 +197,7 @@ static int gm_json_start_array(void *ctx) {
 
     if (request->last_key && strcasecmp(request->last_key, "servers") == 0) {
         request->parsing_servers = true;
-        g_list_free_full(request->servers, g_free);
+        request->servers = g_queue_new();
     }
     return 1;
 }
@@ -265,7 +269,6 @@ static gboolean get_messages_timeout(gpointer userdata) {
 
     curl_easy_getinfo(curl, CURLINFO_PRIVATE, &request);
 
-    SERVER_REC *server = request->server;
     gchar *address = NULL;
     if (request->server->connrec && request->server->connrec->address) {
         address = g_strdup(request->server->connrec->address);
@@ -274,16 +277,17 @@ static gboolean get_messages_timeout(gpointer userdata) {
 
     printtext(NULL, NULL, MSGLEVEL_CRAP, "get_messages_timeout");
 
-    curl_multi_remove_handle(curl_handle, curl);
+    curl_multi_remove_handle(curl_handle_gm, curl);
     request->ctx->curl_handles = g_list_remove(request->ctx->curl_handles, curl);
     curl_easy_cleanup(curl);
     free(request->body->body);
     free(request->body);
     free(request->target);
+    struct t_robustsession_ctx *ctx = request->ctx;
     free(request);
 
     if (address) {
-        robustsession_network_server(address, TRUE, request->ctx->cancellable, get_messages, request->ctx);
+        robustsession_network_server(address, TRUE, ctx->cancellable, get_messages, ctx);
         g_free(address);
     }
 
@@ -329,10 +333,10 @@ static void get_messages(const char *target, gpointer userdata) {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 0);
 
     /* Make libcurl immediately start handling the request. */
-    curl_multi_add_handle(curl_handle, curl);
+    curl_multi_add_handle(curl_handle_gm, curl);
     ctx->curl_handles = g_list_append(ctx->curl_handles, curl);
     int running;
-    curl_multi_socket_action(curl_handle, CURL_SOCKET_TIMEOUT, 0, &running);
+    curl_multi_socket_action(curl_handle_gm, CURL_SOCKET_TIMEOUT, 0, &running);
 }
 
 static bool create_session_done(struct t_robustirc_request *request, CURL *curl) {
@@ -413,6 +417,7 @@ static void retry_request(const char *target, gpointer userdata) {
     request->target = g_strdup(target);
 
     gchar *url = NULL;
+    CURLM *multi = curl_handle;
     if (request->type == RT_GETMESSAGES) {
         url = g_strdup_printf(
             "https://%s%s?lastseen=%s",
@@ -421,13 +426,14 @@ static void retry_request(const char *target, gpointer userdata) {
             request->ctx->lastseen);
         request->timeout_tag = g_timeout_add_seconds(
             60, get_messages_timeout, curl);
+        multi = curl_handle_gm;
     } else {
         url = g_strdup_printf(
             "https://%s%s", request->target, request->url_suffix);
     }
     curl_easy_setopt(curl, CURLOPT_URL, url);
     g_free(url);
-    curl_multi_add_handle(curl_handle, curl);
+    curl_multi_add_handle(multi, curl);
     request->ctx->curl_handles = g_list_append(request->ctx->curl_handles, curl);
     int running;
     curl_multi_socket_action(curl_handle, CURL_SOCKET_TIMEOUT, 0, &running);
@@ -436,13 +442,13 @@ static void retry_request(const char *target, gpointer userdata) {
 // check_multi_info iterates through all curl handles, handling those that
 // completed by either retrying the request (on temporary errors) or freeing
 // the corresponding memory.
-static void check_multi_info(void) {
+static void check_multi_info(CURLM *multi) {
     CURLMsg *message = NULL;
     struct t_robustirc_request *request = NULL;
     int pending;
     long http_code;
 
-    while ((message = curl_multi_info_read(curl_handle, &pending))) {
+    while ((message = curl_multi_info_read(multi, &pending))) {
         if (message->msg != CURLMSG_DONE)
             continue;
 
@@ -482,7 +488,7 @@ static void check_multi_info(void) {
 
         if ((error && temporary_error) ||
             (!error && request->type == RT_GETMESSAGES)) {
-            curl_multi_remove_handle(curl_handle, message->easy_handle);
+            curl_multi_remove_handle(multi, message->easy_handle);
             request->ctx->curl_handles = g_list_remove(request->ctx->curl_handles, message->easy_handle);
             if (request->type == RT_GETMESSAGES) {
                 g_source_remove(request->timeout_tag);
@@ -530,7 +536,7 @@ static void check_multi_info(void) {
         }
 
     cleanup:
-        curl_multi_remove_handle(curl_handle, message->easy_handle);
+        curl_multi_remove_handle(multi, message->easy_handle);
         request->ctx->curl_handles = g_list_remove(request->ctx->curl_handles, message->easy_handle);
         curl_easy_cleanup(message->easy_handle);
         free(request->body->body);
@@ -541,38 +547,49 @@ static void check_multi_info(void) {
 
 /* irssi callback which notifies libcurl about events on file descriptor |fd|. */
 static void socket_recv_cb(void *data, GIOChannel *source, int condition) {
+    (void)condition;
+    CURLM *multi = data;
     int running;
     CURLMcode result = curl_multi_socket_action(
-        curl_handle, g_io_channel_unix_get_fd(source), 0, &running);
+        multi, g_io_channel_unix_get_fd(source), 0, &running);
     if (result != CURLM_OK) {
         printformat_module(MODULE_NAME, NULL, NULL,
                            MSGLEVEL_CRAP, ROBUSTIRCTXT_ERROR_TEMPORARY,
                            curl_multi_strerror(result));
     }
-    check_multi_info();
+    check_multi_info(multi);
 }
+
+struct t_timeout_ctx {
+    guint *id;
+    CURLM *multi;
+};
 
 /* irssi callback which notifies libcurl about a timeout. */
 static gboolean timeout_cb(gpointer user_data) {
-    if (user_data) {
-        g_free(user_data);
-        curl_multi_setopt(curl_handle, CURLMOPT_TIMERDATA, NULL);
-    }
+    struct t_timeout_ctx *ctx = user_data;
+
+    g_free(ctx->id);
+    curl_multi_setopt(ctx->multi, CURLMOPT_TIMERDATA, NULL);
 
     int running;
     CURLMcode result = curl_multi_socket_action(
-        curl_handle, CURL_SOCKET_TIMEOUT, 0, &running);
+        ctx->multi, CURL_SOCKET_TIMEOUT, 0, &running);
     if (result != CURLM_OK) {
         printformat_module(MODULE_NAME, NULL, NULL,
                            MSGLEVEL_CRAP, ROBUSTIRCTXT_ERROR_TEMPORARY,
                            curl_multi_strerror(result));
     }
-    check_multi_info();
+    check_multi_info(ctx->multi);
+    g_free(ctx);
     return G_SOURCE_REMOVE;
 }
 
-/* libcurl callback which sets up a WeeChat hook to watch for events on socket |s|. */
-static int socket_callback(CURL *easy, curl_socket_t s, int what, void *userp, void *socketp) {
+/* libcurl callback which sets up a glib hook to watch for events on socket |s|. */
+static int _socket_callback(CURLM *multi, CURL *easy, curl_socket_t s, int what, void *userp, void *socketp) {
+    (void)easy;
+    (void)userp;
+
     if (what == CURL_POLL_NONE)
         return 0;
 
@@ -582,7 +599,7 @@ static int socket_callback(CURL *easy, curl_socket_t s, int what, void *userp, v
         if (id) {
             g_source_remove(*id);
             g_free(id);
-            curl_multi_assign(curl_handle, s, NULL);
+            curl_multi_assign(multi, s, NULL);
         }
         return 0;
     }
@@ -605,18 +622,27 @@ static int socket_callback(CURL *easy, curl_socket_t s, int what, void *userp, v
             condition = G_INPUT_READ | G_INPUT_WRITE;
             break;
     }
-    *id = g_input_add(handle, condition, socket_recv_cb, NULL);
+    *id = (guint)g_input_add(handle, condition, socket_recv_cb, multi);
     g_io_channel_unref(handle);
-    curl_multi_assign(curl_handle, s, id);
+    curl_multi_assign(multi, s, id);
     return 0;
 }
 
-/* libcurl callback to adjust the timeout of our WeeChat timer. */
+static int socket_callback(CURL *easy, curl_socket_t s, int what, void *userp, void *socketp) {
+    return _socket_callback(curl_handle, easy, s, what, userp, socketp);
+}
+
+static int socket_callback_gm(CURL *easy, curl_socket_t s, int what, void *userp, void *socketp) {
+    return _socket_callback(curl_handle_gm, easy, s, what, userp, socketp);
+}
+
+/* libcurl callback to adjust the timeout of our glib timer. */
 static int start_timeout(CURLM *multi, long timeout_ms, void *userp) {
     guint *id = userp;
 
-    if (id)
+    if (id) {
         g_source_remove(*id);
+    }
 
     // -1 means we should just delete our timer.
     if (timeout_ms == -1) {
@@ -625,7 +651,10 @@ static int start_timeout(CURLM *multi, long timeout_ms, void *userp) {
     } else {
         if (!id)
             id = g_new(guint, 1);
-        *id = g_timeout_add(timeout_ms, timeout_cb, id);
+        struct t_timeout_ctx *ctx = g_new0(struct t_timeout_ctx, 1);
+        ctx->id = id;
+        ctx->multi = multi;
+        *id = (guint)g_timeout_add((guint)timeout_ms, timeout_cb, ctx);
     }
     curl_multi_setopt(multi, CURLMOPT_TIMERDATA, id);
     return 0;
@@ -664,12 +693,25 @@ bool robustsession_init(void) {
 
     curl_multi_setopt(curl_handle, CURLMOPT_SOCKETFUNCTION, socket_callback);
     curl_multi_setopt(curl_handle, CURLMOPT_TIMERFUNCTION, start_timeout);
+    /* Open at most one connection per server to not race ourselves. */
+    curl_multi_setopt(curl_handle, CURLMOPT_MAX_HOST_CONNECTIONS, 1L);
+    /* Pipeline requests (in-order), don’t multiplex them: */
+    curl_multi_setopt(curl_handle, CURLMOPT_PIPELINING, CURLPIPE_HTTP1);
+
+    if (!(curl_handle_gm = curl_multi_init()))
+        return false;
+
+    curl_multi_setopt(curl_handle_gm, CURLMOPT_SOCKETFUNCTION, socket_callback_gm);
+    curl_multi_setopt(curl_handle_gm, CURLMOPT_TIMERFUNCTION, start_timeout);
+    /* Open at most one connection per server to not race ourselves. */
+    curl_multi_setopt(curl_handle_gm, CURLMOPT_MAX_HOST_CONNECTIONS, 1L);
 
     return robustsession_network_init();
 }
 
 void robustsession_deinit(void) {
     curl_multi_cleanup(curl_handle);
+    curl_multi_cleanup(curl_handle_gm);
 }
 
 static void curl_set_common_options(CURL *curl,
@@ -800,7 +842,7 @@ static void robustsession_send_target(const char *target, gpointer callback) {
     yajl_gen_string(gen, (const unsigned char *)"Data", strlen("Data"));
     yajl_gen_string(gen, (const unsigned char *)send_ctx->buffer, strlen(send_ctx->buffer));
     yajl_gen_string(gen, (const unsigned char *)"ClientMessageId", strlen("ClientMessageId"));
-    yajl_gen_integer(gen, g_str_hash(send_ctx->buffer) + rand());
+    yajl_gen_integer(gen, g_str_hash(send_ctx->buffer) + (guint)rand());
     yajl_gen_map_close(gen);
     const unsigned char *body = NULL;
     size_t len = 0;
@@ -853,6 +895,7 @@ error:
 }
 
 void robustsession_send(struct t_robustsession_ctx *ctx, SERVER_REC *server, const char *buffer, int size_buf) {
+    (void)size_buf;
     assert(ctx);
 
     struct send_ctx *sendctx = g_new0(struct send_ctx, 1);
