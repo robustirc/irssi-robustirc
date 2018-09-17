@@ -32,6 +32,12 @@
 #include "module-formats.h"
 #include "robustsession-network.h"
 
+// irssi 1.0 backward compatibility
+// IRSSI_ABI_VERSION was introduced in 0.8.18
+#if !defined(IRSSI_ABI_VERSION) || IRSSI_ABI_VERSION < 6
+#  define tls_verify ssl_verify
+#endif
+
 // from http://robustirc.net/docs/robustsession.html#getmessages
 static const long robustirc_to_client = 3;
 static const long robustping = 4;
@@ -727,7 +733,7 @@ static void curl_set_common_options(CURL *curl,
     curl_easy_setopt(curl, CURLOPT_PRIVATE, request);
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, request->curl_error_buf);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER,
-                     (int)server->connrec->ssl_verify);
+                     (int)server->connrec->tls_verify);
 
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5);
