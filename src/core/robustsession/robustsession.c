@@ -615,20 +615,20 @@ static int _socket_callback(CURLM *multi, CURL *easy, curl_socket_t s, int what,
     } else {
         g_source_remove(*id);
     }
-    GIOChannel *handle = g_io_channel_new(s);
+    GIOChannel *handle = i_io_channel_new(s);
     int condition = 0;
     switch (what) {
         case CURL_POLL_IN:
-            condition = G_INPUT_READ;
+            condition = I_INPUT_READ;
             break;
         case CURL_POLL_OUT:
-            condition = G_INPUT_WRITE;
+            condition = I_INPUT_WRITE;
             break;
         case CURL_POLL_INOUT:
-            condition = G_INPUT_READ | G_INPUT_WRITE;
+            condition = I_INPUT_READ | I_INPUT_WRITE;
             break;
     }
-    *id = (guint)g_input_add(handle, condition, socket_recv_cb, multi);
+    *id = (guint)i_input_add(handle, condition, socket_recv_cb, multi);
     g_io_channel_unref(handle);
     curl_multi_assign(multi, s, id);
     return 0;
