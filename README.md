@@ -2,8 +2,9 @@ This is an irssi plugin which allows you to connect to a
 [RobustIRC](http://robustirc.net/) network without using [a
 bridge](https://github.com/robustirc/bridge).
 
-The plugin is very new, hence there will likely be bugs. Please report them so
-that we get a chance to fix them.
+**This irssi plugin is currently not working, at least with irssi 1.4.2. User
+interest has been low, so I don’t foresee spending time to fix the plugin, and
+would recommend using the RobustIRC bridge instead.**
 
 ## Installing
 
